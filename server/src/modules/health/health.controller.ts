@@ -1,9 +1,9 @@
 import type { Request, Response } from 'express';
+import { sendSuccess } from '../../utils/api-response.js';
 
 export function getHealth(_req: Request, res: Response): void {
   // Liveness only: database and Redis readiness checks come with their integrations.
-  res.status(200).json({
-    status: 'ok',
+  sendSuccess(res, {
     service: 'thinkweave-api',
   });
 }
