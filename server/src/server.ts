@@ -1,10 +1,12 @@
+import 'dotenv/config';
 import { app } from './app.js';
-import { env } from './config/env.js';
 import { prisma } from './lib/prisma.js';
 import { redis } from './lib/redis.js';
 
-const server = app.listen(env.PORT, () => {
-  console.log(`ThinkWeave API is listening on http://localhost:${env.PORT}`);
+const port = Number(process.env.PORT ?? 8080);
+
+const server = app.listen(port, () => {
+  console.log(`ThinkWeave API is listening on http://localhost:${port}`);
 });
 server.on('error', (error) => {
   console.error('Failed to start the ThinkWeave API:', error.message);

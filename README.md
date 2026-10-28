@@ -48,7 +48,7 @@ Run inside `server/`:
 
 ## Configuration and clients
 
-`src/config/env.ts` loads and validates environment variables. Values are not logged. Prisma uses the PostgreSQL driver adapter from `src/lib/prisma.ts`. The Redis client in `src/lib/redis.ts` connects lazily when used; currently no endpoint uses it. `src/lib/gemini.ts` calls the Gemini REST API only on demand and requires a key then. `src/server.ts` closes the HTTP server and clients on shutdown. None of these clients proves an external service is reachable merely because the application starts.
+`src/server.ts` imports `dotenv/config` to load `.env`; each client reads its settings directly from `process.env`. Prisma CLI loads `.env` separately in `prisma.config.ts`. These settings are not centrally validated. `DATABASE_URL` must be set; Redis defaults to `redis://localhost:6379` and `PORT` defaults to 8080. Prisma uses the PostgreSQL driver adapter from `src/lib/prisma.ts`. The Redis client in `src/lib/redis.ts` connects lazily when used; currently no endpoint uses it. `src/lib/gemini.ts` calls the Gemini REST API only on demand and requires a key then. `src/server.ts` closes the HTTP server and clients on shutdown. None of these clients proves an external service is reachable merely because the application starts.
 
 Redis is bound to localhost by default. Compose uses a named volume for local persistence; cache data should not be treated as the source of truth. The setup is intended for local development and needs appropriate authentication, network restrictions, and operational configuration before production.
 
