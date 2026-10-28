@@ -1,177 +1,81 @@
 # ThinkWeave
 
-Think together. Build a plan.
+A collaborative planning board built in reviewable steps. This checkpoint sets up the backend foundation and database schema; it does not implement authentication, workspaces, boards, live editing, or AI endpoints yet.
 
-ThinkWeave is a collaborative planning board being built in small, reviewable checkpoints. The planned product combines shared notes and diagrams, real-time editing, offline synchronization, and Gemini-assisted task planning.
+## Stack
 
-## Current checkpoint: shared utilities and error handling
+Node.js 24, TypeScript, Express, PostgreSQL, Prisma ORM 7, Redis (Docker), and a Gemini REST helper. PostgreSQL runs separately; only Redis is in Docker Compose.
 
-Implemented:
+## Local setup (Windows PowerShell)
 
-- Node.js 24 and TypeScript with ES modules and strict type checking.
-- Express backend with separate startup, application, routing, and controller files.
-- `GET /health` liveness endpoint using a shared success response.
-- `ApiError` for intentional HTTP failures and centralized JSON error handling.
-- Safe responses for malformed JSON, oversized bodies, unsupported encodings, and unexpected failures.
-- Development, type-checking, build, and production-start commands.
-- Reserved folders for the next checkpoints.
-
-This is the backend foundation, not the complete application. PostgreSQL, Prisma 7, Redis, authentication, Gemini, and the frontend are not integrated yet. No database, Redis instance, Docker installation, or API key is needed to run this checkpoint.
-
-## Run locally
-
-Install Node.js **24.x** with npm first. The root `.nvmrc` records the Node major version.
-
-```bash
-git clone https://github.com/Utpalsonowal7/Thinkweave.git
-cd Thinkweave/server
-npm ci
-npm run dev
-```
-
-Open <http://localhost:8080/health> in your browser:
-
-```json
-{
-  "statusCode": 200,
-  "message": "success",
-  "data": {
-    "service": "thinkweave-api"
-  },
-  "success": true
-}
-```
-
-Success responses use the `ApiResponse` class: `statusCode`, `message`, `data`, and `success`. The service name lives inside `data`. Error responses use the separate error format documented below.
-
-This endpoint confirms that the HTTP application can respond. It does not claim that PostgreSQL, Redis, or Gemini are available. Database readiness will be handled separately when those dependencies exist.
-
-The default port is `8080`. You can override it with the `PORT` environment variable. `.env` loading will be added in the configuration checkpoint; creating a `.env` file alone does not change the port yet.
-
-PowerShell example:
+1. Install Node.js 24, PostgreSQL, and Docker Desktop. Create a **dedicated, empty** PostgreSQL database called `thinkweave` using your existing PostgreSQL installation.
+2. Clone the repository, start Redis, and install dependencies:
 
 ```powershell
-$env:PORT = "8081"
+git clone https://github.com/Utpalsonowal7/Thinkweave.git
+cd Thinkweave
+docker compose up -d redis
+cd server
+npm ci
+Copy-Item .env.example .env
+```
+
+3. Edit `server/.env`: replace `DATABASE_URL` with the connection string for your dedicated database. Set `REDIS_URL` if needed. `GEMINI_API_KEY` is optional until AI features are used. Do not commit `.env`.
+4. Generate the client, apply the checked-in migration, and start the server:
+
+```powershell
+npm run prisma:generate
+npm run db:deploy
 npm run dev
 ```
+
+Open http://localhost:8080/health. This is a **liveness** endpoint; it does not check database, Redis, or Gemini connectivity. `db:deploy` applies migrations to the database in `DATABASE_URL` and does not reset it. Review the migration before applying it. For development schema changes later, `npm run db:migrate -- --name descriptive_name` uses Prisma's development migration workflow; it can request a shadow database or prompt on drift, so read any prompt and never reset an existing database without a backup.
 
 ## Commands
 
-Run these inside `server/`:
+Run inside `server/`:
 
 | Command | Purpose |
 | --- | --- |
-| `npm ci` | Install the exact dependency versions from the lockfile |
-| `npm run dev` | Run TypeScript with automatic restart on edits |
-| `npm run typecheck` | Check source types without generating files |
-| `npm run build` | Compile `src/` into JavaScript in `dist/` |
-| `npm start` | Run the compiled server; build first |
+| `npm run prisma:generate` | Generate the Prisma client after install/schema changes |
+| `npm run prisma:validate` | Validate the Prisma schema |
+| `npm run db:deploy` | Apply checked-in migrations |
+| `npm run db:migrate -- --name name` | Create and apply a development migration |
+| `npm run typecheck` | Type-check source (generate client first) |
+| `npm run build` | Compile TypeScript (generate client first) |
+| `npm run dev` | Start with file watching |
+| `npm start` | Run compiled code after build |
 
-`tsx` runs development code but does not type-check it. Use the type-check command before committing.
+## Configuration and clients
 
-## Packages
+`src/config/env.ts` loads and validates environment variables. Values are not logged. Prisma uses the PostgreSQL driver adapter from `src/lib/prisma.ts`. The Redis client in `src/lib/redis.ts` connects lazily when used; currently no endpoint uses it. `src/lib/gemini.ts` calls the Gemini REST API only on demand and requires a key then. `src/server.ts` closes the HTTP server and clients on shutdown. None of these clients proves an external service is reachable merely because the application starts.
 
-| Package | Purpose |
+Redis is bound to localhost by default. Compose uses a named volume for local persistence; cache data should not be treated as the source of truth. The setup is intended for local development and needs appropriate authentication, network restrictions, and operational configuration before production.
+
+## Models
+
+The Prisma schema is `server/prisma/schema.prisma`; generated client code is ignored by Git.
+
+| Model | Purpose |
 | --- | --- |
-| `express` | HTTP application, middleware, and routing |
-| `typescript` | Type checking and JavaScript compilation |
-| `tsx` | TypeScript execution in development, alongside Node's built-in watcher |
-| `@types/express` | Express type definitions |
-| `@types/node` | Node.js type definitions |
+| User | Account identity and password hash |
+| Session | Per-device refresh-token hash, expiry, and revocation |
+| Workspace | Team container |
+| WorkspaceMember | User/workspace membership and role |
+| Board | Board metadata and creator |
+| WorkspaceInvitation | Hashed invitation token, recipient, role, and lifecycle |
+| BoardUpdate | Persisted binary collaboration update |
+| BoardSnapshot | Binary board checkpoint and optional last update marker |
+| AIProposal | Proposed JSON changes, requester, and review status |
 
-Only Express is a runtime dependency at this checkpoint. The other packages are development dependencies. We will add libraries when their feature is implemented.
+Workspace memberships are unique per user and workspace. A database index restricts a workspace to **at most** one owner; the application must enforce that an owner exists and handle ownership transfer in a transaction. The migration also prevents invitations from assigning the owner role. Email normalization, role authorization, invitation acceptance, token rotation, valid board state, snapshot restoration, proposal validation, and tenant isolation require future application logic; the schema alone does not implement them. The ordering, compaction and restoration semantics for Yjs updates still need to be designed and validated before collaboration is implemented.
 
-## Read the code in this order
+Board content is intended to be stored as Yjs binary updates and snapshots, rather than independent SQL rows for every canvas item. `AIProposal.proposal` is untrusted JSON until validated by the future AI service; no AI actions are applied yet. The optional last-update marker is a cursor, not a foreign key, because old updates may later be compacted.
 
-| File | Responsibility |
-| --- | --- |
-| `server/src/server.ts` | Validates the port and starts the HTTP listener |
-| `server/src/app.ts` | Creates the Express app, registers middleware and routes, and handles unknown paths |
-| `server/src/routes/index.ts` | Mounts feature routers; currently `/health` |
-| `server/src/modules/health/health.routes.ts` | Connects the health GET route to its handler |
-| `server/src/modules/health/health.controller.ts` | Sends the health response |
-| `server/src/utils/api-response.ts` | Defines the generic ApiResponse class |
-| `server/src/utils/api-error.ts` | Represents an intentional HTTP error with a status, code, and message |
-| `server/src/middlewares/not-found.ts` | Turns an unmatched request into a 404 ApiError |
-| `server/src/middlewares/error-handler.ts` | Normalizes errors and sends safe JSON responses |
-| `server/tsconfig.json` | Controls type checking, module resolution, and compilation |
-| `server/package.json` | Defines scripts, dependencies, and the supported Node version |
+## Responses and errors
 
-For `GET /health`, Express passes the request through the root router and health router to `getHealth`, which sends the JSON response. Keeping `app.ts` separate from `server.ts` also allows importing the app without opening a listening port.
+`ApiResponse` stores `statusCode`, `message`, `data`, and `success`. `ApiError` extends `Error` with a status, optional details, and captured stack. The middleware returns safe JSON errors; 5xx responses do not expose internal messages or stack traces. Read `src/utils/` and `src/middlewares/` for the request flow.
 
-Local imports use `.js` extensions even in TypeScript source because the compiled ES modules run as `.js` files in Node. `NodeNext` lets TypeScript resolve these imports back to their `.ts` sources during development and compilation.
+## Next steps
 
-## How the utilities work
-
-### Successful requests
-
-A controller creates `new ApiResponse(statusCode, message, data)`, then sends it with Express. The class stores the HTTP status, message, and payload and calculates `success` using `statusCode < 400`. It only creates an object; `res.status(...).json(...)` actually sends the HTTP response.
-
-For example, the health controller uses:
-
-```typescript
-const response = new ApiResponse(200, 'success', { service: 'thinkweave-api' });
-res.status(response.statusCode).json(response);
-```
-
-`ApiResponse<T>` is generic: TypeScript infers `T` from the supplied data, so each controller keeps its own payload type. To use the default message, pass `undefined` as the second argument: `new ApiResponse(200, undefined, data)`. The HTTP status comes from the same object to keep the body and actual response status consistent. A 204 response has no body and should use `res.status(204).end()` directly.
-
-### Expected failures
-
-Create an error with `new ApiError(statusCode, message, errors, stack)`. The message defaults to `Something went wrong`, errors defaults to an empty array, and the stack is captured when none is supplied.
-
-```typescript
-throw new ApiError(403, 'You cannot edit this board.');
-```
-
-The error middleware sends the status, message, null data, errors, and `success: false`. For server errors it replaces the message with a generic one and omits error details; stack traces are never sent to clients.
-
-An unknown route returns HTTP 404:
-
-```json
-{
-  "statusCode": 404,
-  "message": "Route not found",
-  "data": null,
-  "errors": [],
-  "success": false
-}
-```
-
-Malformed JSON returns 400, oversized bodies return 413, and unsupported encodings return 415. Unexpected errors return 500. If headers have already been sent, the middleware delegates to Express.
-
-## Verify this checkpoint
-
-```bash
-cd server
-npm run typecheck
-npm run build
-```
-
-For a manual check, run `npm run dev` and open `/health` for the success response or an unknown path for the JSON 404 response.
-
-## Folder responsibilities
-
-| Folder | Intended contents |
-| --- | --- |
-| `client/` | Future React frontend |
-| `server/src/modules/` | Feature-specific routes, controllers, and later services |
-| `server/src/routes/` | Root route registration |
-| `server/src/config/` | Future validated application settings |
-| `server/src/utils/` | Shared error and response helpers |
-| `server/src/middlewares/` | Error handling and 404 middleware; authentication and validation come later |
-| `server/src/lib/` | Future Prisma, Redis, and Gemini clients |
-
-Empty folders contain `.gitkeep` placeholders so Git tracks their structure. These placeholders do not run any code.
-
-## Next checkpoints
-
-Each checkpoint will be implemented, checked, pushed, and reviewed before moving on.
-
-1. **Initialization:** complete.
-2. **Utilities:** this checkpoint; shared errors, response conventions, and error middleware.
-3. **Configuration:** validated environment settings, local Redis through Docker, and its connection lifecycle. PostgreSQL remains separate from Docker.
-4. **Prisma 7:** PostgreSQL connection, Prisma configuration, and client setup.
-5. **Models:** review and implement users, sessions, workspaces, memberships, boards, and invitations, then create the first migration.
-
-Authentication and product features follow the models. Later collaboration work will use Yjs and WebSockets with durable PostgreSQL storage and local browser persistence. Gemini will generate reviewable task proposals rather than directly applying unapproved edits.
+Build authentication and session rotation, then workspace membership and invitation APIs. Add live editing and Gemini only after authorization and persistence behavior are implemented. Explain and review each feature before moving on.
