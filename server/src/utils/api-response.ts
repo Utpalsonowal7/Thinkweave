@@ -1,21 +1,21 @@
-import type { Response } from 'express';
+class ApiResponse<T> {
+  readonly statusCode: number;
+  readonly message: string;
+  readonly data: T;
+  readonly success: boolean;
 
-export interface SuccessResponse<T> {
-  status: 'ok';
-  data: T;
+  constructor(statusCode: number, message = 'success', data: T) {
+    this.statusCode = statusCode;
+    this.message = message;
+    this.data = data;
+    this.success = statusCode < 400;
+  }
 }
+
+export { ApiResponse };
 
 export interface ErrorResponse {
   status: 'error';
   code: string;
   message: string;
-}
-
-/** Send a JSON success response. For 204 No Content, use res.status(204).end(). */
-export function sendSuccess<T>(
-  res: Response<SuccessResponse<T>>,
-  data: T,
-  statusCode: 200 | 201 | 202 = 200,
-): void {
-  res.status(statusCode).json({ status: 'ok', data });
 }

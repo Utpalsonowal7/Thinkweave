@@ -33,14 +33,16 @@ Open <http://localhost:8080/health> in your browser:
 
 ```json
 {
-  "status": "ok",
+  "statusCode": 200,
+  "message": "success",
   "data": {
     "service": "thinkweave-api"
-  }
+  },
+  "success": true
 }
 ```
 
-**Response change from checkpoint 1:** `service` now lives inside `data`. All JSON success responses will follow this envelope.
+Success responses use the `ApiResponse` class: `statusCode`, `message`, `data`, and `success`. The service name lives inside `data`. Error responses use the separate error format documented below.
 
 This endpoint confirms that the HTTP application can respond. It does not claim that PostgreSQL, Redis, or Gemini are available. Database readiness will be handled separately when those dependencies exist.
 
@@ -88,7 +90,7 @@ Only Express is a runtime dependency at this checkpoint. The other packages are 
 | `server/src/routes/index.ts` | Mounts feature routers; currently `/health` |
 | `server/src/modules/health/health.routes.ts` | Connects the health GET route to its handler |
 | `server/src/modules/health/health.controller.ts` | Sends the health response |
-| `server/src/utils/api-response.ts` | Defines the response shapes and sends typed success responses |
+| `server/src/utils/api-response.ts` | Defines the generic ApiResponse class and the error response type |
 | `server/src/utils/app-error.ts` | Represents an intentional HTTP error with a status, code, and message |
 | `server/src/middlewares/not-found.ts` | Turns an unmatched request into a 404 AppError |
 | `server/src/middlewares/error-handler.ts` | Normalizes errors and sends safe JSON responses |
@@ -103,13 +105,16 @@ Local imports use `.js` extensions even in TypeScript source because the compile
 
 ### Successful requests
 
-A controller calls `sendSuccess(res, data)`. The helper sends HTTP 200 and wraps its data in `{ "status": "ok", "data": ... }`. The optional third argument supports HTTP 201 for creation and 202 for accepted work. A 204 response has no body and should use `res.status(204).end()` directly.
+A controller creates `new ApiResponse(statusCode, message, data)`, then sends it with Express. The class stores the HTTP status, message, and payload and calculates `success` using `statusCode < 400`. It only creates an object; `res.status(...).json(...)` actually sends the HTTP response.
 
-For example, the health controller calls:
+For example, the health controller uses:
 
 ```typescript
-sendSuccess(res, { service: 'thinkweave-api' });
+const response = new ApiResponse(200, 'success', { service: 'thinkweave-api' });
+res.status(response.statusCode).json(response);
 ```
+
+`ApiResponse<T>` is generic: TypeScript infers `T` from the supplied data, so each controller keeps its own payload type. To use the default message, pass `undefined` as the second argument: `new ApiResponse(200, undefined, data)`. The HTTP status comes from the same object to keep the body and actual response status consistent. A 204 response has no body and should use `res.status(204).end()` directly.
 
 ### Expected failures
 
