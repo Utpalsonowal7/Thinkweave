@@ -13,9 +13,3 @@ class ApiResponse<T> {
 }
 
 export { ApiResponse };
-
-export interface ErrorResponse {
-  status: 'error';
-  code: string;
-  message: string;
-}

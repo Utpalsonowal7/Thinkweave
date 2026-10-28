@@ -1,9 +1,8 @@
 import type { ErrorRequestHandler } from 'express';
-import { AppError } from '../utils/app-error.js';
-import type { ErrorResponse } from '../utils/api-response.js';
+import { ApiError } from '../utils/api-error.js';
 
-function normalizeError(error: unknown): AppError {
-  if (error instanceof AppError) {
+function normalizeError(error: unknown): ApiError {
+  if (error instanceof ApiError) {
     return error;
   }
 
@@ -11,19 +10,19 @@ function normalizeError(error: unknown): AppError {
   if (error instanceof Error && 'type' in error) {
     switch (error.type) {
       case 'entity.parse.failed':
-        return new AppError(400, 'INVALID_JSON', 'Request body must contain valid JSON.');
+        return new ApiError(400, 'Request body must contain valid JSON.');
       case 'entity.too.large':
-        return new AppError(413, 'PAYLOAD_TOO_LARGE', 'Request body exceeds the 1 MB limit.');
+        return new ApiError(413, 'Request body exceeds the 1 MB limit.');
       case 'charset.unsupported':
       case 'encoding.unsupported':
-        return new AppError(415, 'UNSUPPORTED_ENCODING', 'Request body encoding is not supported.');
+        return new ApiError(415, 'Request body encoding is not supported.');
       case 'request.aborted':
       case 'request.size.invalid':
-        return new AppError(400, 'INVALID_REQUEST_BODY', 'Request body could not be read.');
+        return new ApiError(400, 'Request body could not be read.');
     }
   }
 
-  return new AppError(500, 'INTERNAL_SERVER_ERROR', 'An unexpected error occurred.');
+  return new ApiError(500, 'An unexpected error occurred.');
 }
 
 export const errorHandler: ErrorRequestHandler = (error: unknown, req, res, next) => {
@@ -45,10 +44,12 @@ export const errorHandler: ErrorRequestHandler = (error: unknown, req, res, next
     });
   }
 
-  const body: ErrorResponse = {
-    status: 'error',
-    code: isServerError ? 'INTERNAL_SERVER_ERROR' : appError.code,
+  const body = {
+    statusCode: appError.statusCode,
     message: isServerError ? 'An unexpected error occurred.' : appError.message,
+    data: null,
+    errors: isServerError ? [] : appError.errors,
+    success: false,
   };
 
   res.status(appError.statusCode).json(body);

@@ -11,7 +11,7 @@ Implemented:
 - Node.js 24 and TypeScript with ES modules and strict type checking.
 - Express backend with separate startup, application, routing, and controller files.
 - `GET /health` liveness endpoint using a shared success response.
-- `AppError` for intentional HTTP failures and centralized JSON error handling.
+- `ApiError` for intentional HTTP failures and centralized JSON error handling.
 - Safe responses for malformed JSON, oversized bodies, unsupported encodings, and unexpected failures.
 - Development, type-checking, build, and production-start commands.
 - Reserved folders for the next checkpoints.
@@ -90,9 +90,9 @@ Only Express is a runtime dependency at this checkpoint. The other packages are 
 | `server/src/routes/index.ts` | Mounts feature routers; currently `/health` |
 | `server/src/modules/health/health.routes.ts` | Connects the health GET route to its handler |
 | `server/src/modules/health/health.controller.ts` | Sends the health response |
-| `server/src/utils/api-response.ts` | Defines the generic ApiResponse class and the error response type |
-| `server/src/utils/app-error.ts` | Represents an intentional HTTP error with a status, code, and message |
-| `server/src/middlewares/not-found.ts` | Turns an unmatched request into a 404 AppError |
+| `server/src/utils/api-response.ts` | Defines the generic ApiResponse class |
+| `server/src/utils/api-error.ts` | Represents an intentional HTTP error with a status, code, and message |
+| `server/src/middlewares/not-found.ts` | Turns an unmatched request into a 404 ApiError |
 | `server/src/middlewares/error-handler.ts` | Normalizes errors and sends safe JSON responses |
 | `server/tsconfig.json` | Controls type checking, module resolution, and compilation |
 | `server/package.json` | Defines scripts, dependencies, and the supported Node version |
@@ -118,54 +118,27 @@ res.status(response.statusCode).json(response);
 
 ### Expected failures
 
-Future controllers/services can throw an intentional error:
+Create an error with `new ApiError(statusCode, message, errors, stack)`. The message defaults to `Something went wrong`, errors defaults to an empty array, and the stack is captured when none is supplied.
 
 ```typescript
-throw new AppError(403, 'FORBIDDEN', 'You cannot edit this board.');
+throw new ApiError(403, 'You cannot edit this board.');
 ```
 
-- `403` is the HTTP status.
-- `FORBIDDEN` is a stable code that frontend logic can use.
-- The message explains the problem to the user. For 4xx errors, it must be safe to show publicly.
+The error middleware sends the status, message, null data, errors, and `success: false`. For server errors it replaces the message with a generic one and omits error details; stack traces are never sent to clients.
 
-`AppError` extends JavaScript's `Error` and only accepts HTTP statuses from 400 through 599. It describes a failure; it does not send a response itself.
-
-### Centralized error handling
-
-The registration order in `app.ts` is important:
-
-1. Parse JSON bodies, with a 1 MB limit.
-2. Run the application routes.
-3. If no route responds, `notFound` passes a 404 AppError to `next`.
-4. `errorHandler` translates the error into a JSON response.
-
-Errors raised earlier, including JSON parsing errors, skip normal handlers and go to the error middleware. The error handler has four parameters (`error, req, res, next`) so Express recognizes it as error-handling middleware.
-
-An unknown route now returns HTTP 404 with:
+An unknown route returns HTTP 404:
 
 ```json
 {
-  "status": "error",
-  "code": "ROUTE_NOT_FOUND",
-  "message": "Route not found"
+  "statusCode": 404,
+  "message": "Route not found",
+  "data": null,
+  "errors": [],
+  "success": false
 }
 ```
 
-| Failure | HTTP status | Public code |
-| --- | --- | --- |
-| No matching route | 404 | `ROUTE_NOT_FOUND` |
-| Invalid JSON body | 400 | `INVALID_JSON` |
-| JSON body larger than 1 MB | 413 | `PAYLOAD_TOO_LARGE` |
-| Unsupported body encoding/charset | 415 | `UNSUPPORTED_ENCODING` |
-| Aborted or incorrectly sized body | 400, if the connection can still receive a response | `INVALID_REQUEST_BODY` |
-| Unexpected exception | 500 | `INTERNAL_SERVER_ERROR` |
-| Intentional AppError with a 5xx status | Original 5xx status | `INTERNAL_SERVER_ERROR` |
-
-All 5xx responses use the generic message `An unexpected error occurred.` in every environment. Raw exception messages, stack traces, and malformed request contents are not included in JSON responses. The basic server log records only the method, path, and error name; structured logging and richer diagnostics can be introduced with configuration later.
-
-If response headers were already sent, the handler delegates to Express instead of trying to send a second response. At that point a JSON error response is no longer guaranteed.
-
-Express 5 already forwards thrown errors and rejected promises from returned/awaited async handlers. We therefore do not add an `asyncHandler` wrapper. Callback-based or detached asynchronous work still needs explicit error handling. See the [Express error-handling guide](https://expressjs.com/en/guide/error-handling/).
+Malformed JSON returns 400, oversized bodies return 413, and unsupported encodings return 415. Unexpected errors return 500. If headers have already been sent, the middleware delegates to Express.
 
 ## Verify this checkpoint
 
