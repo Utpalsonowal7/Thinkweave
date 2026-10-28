@@ -13,7 +13,7 @@ Implemented:
 - `GET /health` liveness endpoint using a shared success response.
 - `AppError` for intentional HTTP failures and centralized JSON error handling.
 - Safe responses for malformed JSON, oversized bodies, unsupported encodings, and unexpected failures.
-- Development, type-checking, testing, build, and production-start commands.
+- Development, type-checking, build, and production-start commands.
 - Reserved folders for the next checkpoints.
 
 This is the backend foundation, not the complete application. PostgreSQL, Prisma 7, Redis, authentication, Gemini, and the frontend are not integrated yet. No database, Redis instance, Docker installation, or API key is needed to run this checkpoint.
@@ -61,8 +61,7 @@ Run these inside `server/`:
 | --- | --- |
 | `npm ci` | Install the exact dependency versions from the lockfile |
 | `npm run dev` | Run TypeScript with automatic restart on edits |
-| `npm run typecheck` | Check source and test types without generating files |
-| `npm test` | Run the HTTP/error checks with Node's built-in test runner |
+| `npm run typecheck` | Check source types without generating files |
 | `npm run build` | Compile `src/` into JavaScript in `dist/` |
 | `npm start` | Run the compiled server; build first |
 
@@ -94,7 +93,6 @@ Only Express is a runtime dependency at this checkpoint. The other packages are 
 | `server/src/middlewares/not-found.ts` | Turns an unmatched request into a 404 AppError |
 | `server/src/middlewares/error-handler.ts` | Normalizes errors and sends safe JSON responses |
 | `server/tsconfig.json` | Controls type checking, module resolution, and compilation |
-| `server/tsconfig.test.json` | Includes tests in type checking without emitting test JavaScript |
 | `server/package.json` | Defines scripts, dependencies, and the supported Node version |
 
 For `GET /health`, Express passes the request through the root router and health router to `getHealth`, which sends the JSON response. Keeping `app.ts` separate from `server.ts` also allows importing the app without opening a listening port.
@@ -169,13 +167,10 @@ Express 5 already forwards thrown errors and rejected promises from returned/awa
 ```bash
 cd server
 npm run typecheck
-npm test
 npm run build
 ```
 
-The tests exercise real local HTTP requests for health, unknown routes, malformed and oversized JSON, unsupported charsets, async errors, and recovery after a failure. They also check that internal SyntaxErrors are not mislabeled as client JSON errors, that 5xx messages remain private, and that errors after headers are sent are delegated. Failure routes exist only in isolated test apps; they are not exposed by the actual API.
-
-No testing package was added: tests use `node:test`, `node:assert`, and built-in `fetch`, with the existing `tsx` loader. The production build includes only `src/`.
+For a manual check, run `npm run dev` and open `/health` for the success response or an unknown path for the JSON 404 response.
 
 ## Folder responsibilities
 
@@ -188,7 +183,6 @@ No testing package was added: tests use `node:test`, `node:assert`, and built-in
 | `server/src/utils/` | Shared error and response helpers |
 | `server/src/middlewares/` | Error handling and 404 middleware; authentication and validation come later |
 | `server/src/lib/` | Future Prisma, Redis, and Gemini clients |
-| `server/tests/` | HTTP/error behavior checks, separate from production code |
 
 Empty folders contain `.gitkeep` placeholders so Git tracks their structure. These placeholders do not run any code.
 
