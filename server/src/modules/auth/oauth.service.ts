@@ -3,10 +3,9 @@ import { OAuthProvider, Prisma } from '../../generated/prisma/client.js';
 import { prisma } from '../../lib/prisma.js';
 import { redis } from '../../lib/redis.js';
 import { ApiError } from '../../utils/api-error.js';
-import { hashToken } from './auth.service.js';
 
 export type Provider = 'google' | 'github';
-type Flow = { provider: Provider; verifier: string; sessionHash?: string };
+type Flow = { provider: Provider; verifier: string; sessionId?: string };
 type Profile = { id: string; email: string; name: string; avatar: string | null };
 const stateTtl = 600;
 const hash = (value: string) => createHash('sha256').update(value).digest('base64url');
@@ -45,18 +44,16 @@ async function readyRedis(): Promise<void> {
   } catch { throw new ApiError(503, 'OAuth is temporarily unavailable.'); }
 }
 
-export async function start(provider: Provider, sessionToken?: string) {
+export async function start(provider: Provider, sessionId?: string) {
   const { clientId, callback } = config(provider);
   successRedirect();
-  let sessionHash: string | undefined;
-  if (sessionToken) {
-    sessionHash = hashToken(sessionToken);
-    const session = await prisma.session.findUnique({ where: { refreshTokenHash: sessionHash } });
+  if (sessionId) {
+    const session = await prisma.session.findUnique({ where: { id: sessionId } });
     if (!session || session.revokedAt || session.expiresAt <= new Date()) throw new ApiError(401, 'Session is invalid or expired.');
   }
   const state = random();
   const verifier = random();
-  const flow: Flow = { provider, verifier, ...(sessionHash ? { sessionHash } : {}) };
+  const flow: Flow = { provider, verifier, ...(sessionId ? { sessionId } : {}) };
   await readyRedis();
   try {
     const stored = await redis.set(`oauth:state:${hash(state)}`, JSON.stringify(flow), 'EX', stateTtl, 'NX');
@@ -115,8 +112,8 @@ export async function finish(provider: Provider, state: string, cookie: string, 
   if (!data.email || data.email.length > 254) throw new ApiError(403, 'A valid verified email is required.');
   const providerEnum = provider === 'google' ? OAuthProvider.GOOGLE : OAuthProvider.GITHUB;
   try {
-    if (flow.sessionHash) {
-      const session = await prisma.session.findUnique({ where: { refreshTokenHash: flow.sessionHash } });
+    if (flow.sessionId) {
+      const session = await prisma.session.findUnique({ where: { id: flow.sessionId } });
       if (!session || session.revokedAt || session.expiresAt <= new Date()) throw new ApiError(401, 'Session is invalid or expired.');
       const existing = await prisma.oAuthAccount.findUnique({ where: { provider_providerUserId: { provider: providerEnum, providerUserId: data.id } } });
       if (existing && existing.userId !== session.userId) throw new ApiError(409, 'This social account is linked to another user.');

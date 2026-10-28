@@ -1,12 +1,13 @@
 import type { RequestHandler } from 'express';
 import { prisma } from '../lib/prisma.js';
-import { getToken } from '../modules/auth/auth.controller.js';
-import { hashToken } from '../modules/auth/auth.service.js';
+import { getAccessToken } from '../modules/auth/cookies.js';
+import { verifyAccess } from '../modules/auth/tokens.js';
 import { ApiError } from '../utils/api-error.js';
 
 export const authenticate: RequestHandler = async (req, res, next) => {
-  const session = await prisma.session.findUnique({ where: { refreshTokenHash: hashToken(getToken(req)) }, include: { user: { select: { id: true, name: true, email: true, avatarUrl: true, emailVerifiedAt: true, createdAt: true } } } });
-  if (!session || session.revokedAt || session.expiresAt <= new Date()) throw new ApiError(401, 'Session is invalid or expired.');
+  const claims = await verifyAccess(getAccessToken(req));
+  const session = await prisma.session.findUnique({ where: { id: claims.sessionId }, include: { user: { select: { id: true, name: true, email: true, avatarUrl: true, emailVerifiedAt: true, createdAt: true } } } });
+  if (!session || session.userId !== claims.userId || session.revokedAt || session.expiresAt <= new Date()) throw new ApiError(401, 'Session is invalid or expired.');
   res.locals.auth = { user: session.user, sessionId: session.id };
   next();
 };

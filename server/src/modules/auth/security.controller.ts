@@ -3,7 +3,7 @@ import { AuthActionType } from '../../generated/prisma/client.js';
 import { prisma } from '../../lib/prisma.js';
 import { ApiError } from '../../utils/api-error.js';
 import { ApiResponse } from '../../utils/api-response.js';
-import { cookieName, cookieOptions } from './auth.controller.js';
+import { clearAuthCookies } from './cookies.js';
 import * as security from './security.service.js';
 
 function body(req: Request): Record<string, unknown> {
@@ -25,7 +25,7 @@ export async function requestReset(req: Request, res: Response): Promise<void> {
 export async function resetPassword(req: Request, res: Response): Promise<void> {
   const input = body(req);
   await security.resetPassword(input.token, input.password);
-  res.clearCookie(cookieName, cookieOptions);
+  clearAuthCookies(res);
   res.json(new ApiResponse(200, 'Password updated. Please log in again.', null));
 }
 export async function sessions(_req: Request, res: Response): Promise<void> {
@@ -39,12 +39,12 @@ export async function revokeSession(req: Request, res: Response): Promise<void> 
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) throw new ApiError(400, 'Invalid session ID.');
   const result = await prisma.session.updateMany({ where: { id, userId: user.id, revokedAt: null }, data: { revokedAt: new Date() } });
   if (!result.count) throw new ApiError(404, 'Session not found.');
-  if (id === sessionId) res.clearCookie(cookieName, cookieOptions);
+  if (id === sessionId) clearAuthCookies(res);
   res.json(new ApiResponse(200, 'Session revoked.', null));
 }
 export async function revokeAll(_req: Request, res: Response): Promise<void> {
   const { user } = res.locals.auth;
   await prisma.session.updateMany({ where: { userId: user.id, revokedAt: null }, data: { revokedAt: new Date() } });
-  res.clearCookie(cookieName, cookieOptions);
+  clearAuthCookies(res);
   res.json(new ApiResponse(200, 'All sessions revoked.', null));
 }

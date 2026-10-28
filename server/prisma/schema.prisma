@@ -85,9 +85,21 @@ model Session {
   revokedAt        DateTime? @db.Timestamptz(3)
   createdAt        DateTime  @default(now()) @db.Timestamptz(3)
   user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshTokens    RefreshToken[]
 
   @@index([userId])
   @@index([expiresAt])
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  sessionId String    @db.Uuid
+  tokenHash String    @unique
+  usedAt    DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  session   Session   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
 }
 
 model Workspace {

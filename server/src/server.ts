@@ -2,6 +2,9 @@ import 'dotenv/config';
 import { app } from './app.js';
 import { prisma } from './lib/prisma.js';
 import { redis } from './lib/redis.js';
+import { accessSecret } from './modules/auth/tokens.js';
+
+accessSecret();
 
 const port = Number(process.env.PORT ?? 8080);
 

@@ -1,7 +1,8 @@
 import type { Request, Response } from 'express';
 import { ApiError } from '../../utils/api-error.js';
 import { ApiResponse } from '../../utils/api-response.js';
-import { cookieName, cookieOptions, getToken } from './auth.controller.js';
+import { setAuthCookies } from './cookies.js';
+import { signAccess } from './tokens.js';
 import { createSession } from './auth.service.js';
 import * as oauth from './oauth.service.js';
 
@@ -29,7 +30,7 @@ export async function start(req: Request, res: Response): Promise<void> {
 
 export async function link(req: Request, res: Response): Promise<void> {
   const provider = oauth.providerFrom(String(req.params.provider));
-  const flow = await oauth.start(provider, getToken(req));
+  const flow = await oauth.start(provider, res.locals.auth.sessionId);
   noCache(res);
   res.cookie(stateCookieName(provider), flow.state, stateCookieOptions);
   res.status(200).json(new ApiResponse(200, 'Continue to the provider.', { authorizationUrl: flow.url }));
@@ -45,7 +46,7 @@ export async function callback(req: Request, res: Response): Promise<void> {
   const result = await oauth.finish(provider, req.query.state, cookie, req.query.code);
   if (!result.linked) {
     const session = await createSession(result.userId, req.get('user-agent'));
-    res.cookie(cookieName, session.token, { ...cookieOptions, expires: session.expiresAt });
+    setAuthCookies(res, await signAccess(result.userId, session.sessionId), session.token, session.expiresAt);
   }
   res.redirect(302, destination);
 }

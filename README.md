@@ -59,7 +59,8 @@ The Prisma schema is `server/prisma/schema.prisma`; generated client code is ign
 | Model | Purpose |
 | --- | --- |
 | User | Account identity and password hash |
-| Session | Per-device session-token hash, expiry, and revocation |
+| Session | Per-device current refresh-token hash, expiry, and revocation |
+| RefreshToken | Hashed rotation history for detecting reuse |
 | OAuthAccount | Provider identity linked to one user |
 | Workspace | Team container |
 | WorkspaceMember | User/workspace membership and role |
@@ -69,7 +70,7 @@ The Prisma schema is `server/prisma/schema.prisma`; generated client code is ign
 | BoardSnapshot | Binary board checkpoint and optional last update marker |
 | AIProposal | Proposed JSON changes, requester, and review status |
 
-Workspace memberships are unique per user and workspace. A database index restricts a workspace to **at most** one owner; the application must enforce that an owner exists and handle ownership transfer in a transaction. The migration also prevents invitations from assigning the owner role. Email normalization, role authorization, invitation acceptance, token rotation, valid board state, snapshot restoration, proposal validation, and tenant isolation require future application logic; the schema alone does not implement them. The ordering, compaction and restoration semantics for Yjs updates still need to be designed and validated before collaboration is implemented.
+Workspace memberships are unique per user and workspace. A database index restricts a workspace to **at most** one owner; the application must enforce that an owner exists and handle ownership transfer in a transaction. The migration also prevents invitations from assigning the owner role. Email normalization, role authorization, invitation acceptance, valid board state, snapshot restoration, proposal validation, and tenant isolation require future application logic; the schema alone does not implement them. The ordering, compaction and restoration semantics for Yjs updates still need to be designed and validated before collaboration is implemented.
 
 Board content is intended to be stored as Yjs binary updates and snapshots, rather than independent SQL rows for every canvas item. `AIProposal.proposal` is untrusted JSON until validated by the future AI service; no AI actions are applied yet. The optional last-update marker is a cursor, not a foreign key, because old updates may later be compacted.
 
@@ -88,15 +89,20 @@ All routes are under `/api/v1/auth`. Registration creates an account; login star
 | Method and route | Body | Result |
 | --- | --- | --- |
 | `POST /register` | `{ "name": "Utpal", "email": "utpal@example.com", "password": "a-long-password" }` | Creates an account and returns its public fields; then log in |
-| `POST /login` | `{ "email": "utpal@example.com", "password": "a-long-password" }` | Sets a session cookie and returns the user |
-| `GET /me` | None | Returns the user for a valid session cookie |
-| `POST /logout` | `{}` | Revokes the current session and clears the cookie |
+| `POST /login` | `{ "email": "utpal@example.com", "password": "a-long-password" }` | Sets access and refresh cookies and returns the user |
+| `POST /refresh` | `{}` | Rotates the refresh token and sets both cookies |
+| `GET /me` | None | Returns the user for a valid access cookie and active session |
+| `POST /logout` | `{}` | Revokes the current session and clears both cookies |
 
-Send `Content-Type: application/json` for each POST. Email is trimmed and lowercased, names must contain 2–100 characters, and passwords must contain 12–128 characters. Passwords are hashed with Argon2id. Login uses a generic error for unknown accounts and incorrect passwords. A random 32-byte session token is sent in an HttpOnly, SameSite=Strict cookie; only its SHA-256 hash is stored in the existing `Session.refreshTokenHash` column. Sessions expire after seven days and logout revokes the current one. No JWT or token rotation is implemented.
+Send `Content-Type: application/json` for each POST. Email is normalized; passwords use Argon2id. Login sets an HttpOnly, SameSite=Strict **access JWT** (15 minutes) and an opaque **refresh token** (seven-day absolute session lifetime). The access JWT contains user and session IDs and is signed with HS256; `authenticate` verifies its signature and claims and checks the session in PostgreSQL so revocations take effect immediately. The refresh token is random, and only its SHA-256 hash is stored. OAuth login sets the same cookies. No token is returned in the response body.
 
-On production (`NODE_ENV=production`) the cookie is Secure and uses the `__Host-` prefix, requiring HTTPS. Local development uses a non-Secure cookie. Authentication mutations require a JSON body and an exact matching Origin header. The API permits credentialed CORS only for APP_ORIGIN. SameSite=Strict cookies support same-site deployments; a frontend on a different site requires a separate cookie and CSRF design.
+`POST /refresh` requires `{}`, the trusted Origin, and the refresh cookie. It atomically marks the old token used, saves the next token hash, and issues both new cookies. Reusing a consumed refresh token revokes that device session. The client must coordinate refresh requests **across tabs** and allow only one in-flight refresh per session. With strict replay detection, simultaneous requests using the same old token can cause the second request to revoke the session. A lost refresh response can also require a fresh login; do not retry the old token blindly. No grace period or idempotent retry mechanism is implemented. Expired or revoked refresh tokens require login again.
 
-Authentication routes use shared Redis-backed per-IP rate limits and a per-address email cooldown. Authentication mutations fail closed when Redis is unavailable. Express does not trust proxy headers by default; configure trusted proxies deliberately before deployment, or users behind a proxy may share a limit. Password verification is intentionally expensive, so also capacity-plan and apply edge-level abuse controls. Session rotation and recovery for social-only accounts are not implemented.
+Refresh-token history is retained for the lifetime of the session to detect reuse. Production needs a scheduled cleanup policy for expired and revoked sessions and their history. Logout and password reset revoke sessions; access-token checks consult the session, so existing access tokens stop working on the next request. Logout requires a valid access token: refresh first if it has expired.
+
+In production (`NODE_ENV=production`) both cookies are Secure and use the `__Host-` prefix, requiring HTTPS. Local development uses non-Secure cookies. Authentication mutations require a JSON body and an exact matching Origin header. The API permits credentialed CORS only for APP_ORIGIN. SameSite=Strict cookies support same-site deployments; a frontend on a different site requires a separate cookie and CSRF design.
+
+Authentication routes use shared Redis-backed per-IP rate limits and a per-address email cooldown. Authentication mutations fail closed when Redis is unavailable. Express does not trust proxy headers by default; configure trusted proxies deliberately before deployment, or users behind a proxy may share a limit. Password verification is intentionally expensive, so also capacity-plan and apply edge-level abuse controls. Recovery for social-only accounts is not implemented.
 
 ## Google and GitHub sign-in
 
@@ -115,13 +121,13 @@ npm run db:deploy
 npm run dev
 ```
 
-Redis must be available for OAuth, because one-time state and PKCE verifiers expire there after ten minutes. Login initiation uses `GET /api/v1/auth/oauth/google` or `/api/v1/auth/oauth/github` as a browser navigation. On success the API sets the regular session cookie and redirects to `OAUTH_SUCCESS_REDIRECT`. The frontend can then request `GET /api/v1/auth/me`. Provider errors or account conflicts currently return a JSON error at the callback; there is no frontend error page yet.
+Redis must be available for OAuth, because one-time state and PKCE verifiers expire there after ten minutes. Login initiation uses `GET /api/v1/auth/oauth/google` or `/api/v1/auth/oauth/github` as a browser navigation. On success the API sets the access and refresh cookies and redirects to `OAUTH_SUCCESS_REDIRECT`. The frontend can then request `GET /api/v1/auth/me`. Provider errors or account conflicts currently return a JSON error at the callback; there is no frontend error page yet.
 
 Providers are identified by their stable Google `sub` or GitHub numeric ID. Google must provide an email marked verified; GitHub must provide a verified primary email. Provider access tokens are used only to retrieve the profile and are not stored. The app's `emailVerifiedAt` is not set merely because a provider reports an email as verified.
 
 **Existing email accounts are never linked automatically.** First log in to the existing ThinkWeave account, then send JSON `{}` to `POST /api/v1/auth/oauth/google/link` or `/api/v1/auth/oauth/github/link`. Navigate the same browser to the returned `data.authorizationUrl`. The callback links only if that same server-side session remains valid. A provider identity already linked to another user cannot be transferred. Only one account per provider may be linked to each user.
 
-OAuth state uses a short-lived HttpOnly SameSite=Lax cookie bound to a single-use Redis entry; authorization uses PKCE S256. Starting a second flow for the same provider in the same browser replaces its state cookie. Session cookies remain SameSite=Strict, so a frontend hosted on a different site needs a separate CORS and CSRF design. OAuth initiation uses the shared Redis-backed per-IP limiter. Provider credentials and real database/Redis services are required for a full end-to-end check.
+OAuth state uses a short-lived HttpOnly SameSite=Lax cookie bound to a single-use Redis entry; authorization uses PKCE S256. Starting a second flow for the same provider in the same browser replaces its state cookie. Access and refresh cookies remain SameSite=Strict, so a frontend hosted on a different site needs a separate CORS and CSRF design. OAuth initiation uses the shared Redis-backed per-IP limiter. Provider credentials and real database/Redis services are required for a full end-to-end check.
 
 ## Verification, reset, and session management
 
@@ -141,6 +147,18 @@ Registration attempts to send a verification email; if email configuration or de
 
 Email links point to `/verify-email#token=...` and `/reset-password#token=...` on `APP_URL`; fragments are not sent in the HTTP request. **The frontend pages are not built yet**: they must read the token from the fragment, remove it from the visible URL, and POST it in JSON. Until then, use the token from your own email in a manual API request. Do not log tokens or post them in query strings.
 
-`authenticate` validates the stored session and populates `res.locals.auth`; `requireVerifiedEmail` is available for future protected product routes. Account/session endpoints remain accessible to signed-in unverified users so they can manage their account. Social provider email claims do not automatically mark the ThinkWeave email verified; users should complete the verification flow. The app uses opaque sessions; token rotation, replay-family detection, email change, and recovery for social-only accounts are not implemented. Password reset currently applies only to accounts that already have a password.
+`authenticate` validates the stored session and populates `res.locals.auth`; `requireVerifiedEmail` is available for future protected product routes. Account/session endpoints remain accessible to signed-in unverified users so they can manage their account. Social provider email claims do not automatically mark the ThinkWeave email verified; users should complete the verification flow. The app uses rotating opaque refresh tokens and signed access tokens; email change and recovery for social-only accounts are not implemented. Password reset currently applies only to accounts that already have a password.
 
 OAuth initiation and login limits require Redis and fail closed when it is unavailable. When running behind a reverse proxy, explicitly configure Express `trust proxy` to match your infrastructure; the default avoids trusting spoofed forwarding headers but can group users under the proxy IP. Verification and reset email delivery, real OAuth redirects, migration application, and race conditions must be checked with configured external services before production.
+
+## Access-token signing key and upgrade
+
+Set `JWT_ACCESS_SECRET` in `server/.env` to at least 32 cryptographically random bytes encoded as hex. Generate one on your own machine:
+
+```powershell
+node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
+```
+
+Copy the output into `.env` and keep it private. The server refuses to start without a valid hex value. Deploy the same secret to instances that must verify each other's access tokens; rotating it invalidates existing access tokens. The migration intentionally revokes **all existing sessions** because old session cookies have no refresh-token history. Users must log in again after `npm run db:deploy`. New OAuth and password logins issue the new cookies.
+
+The refresh implementation serializes each session's database update and retains consumed hashes; database integration and concurrent replay behavior still need verification against a running PostgreSQL instance before deployment.

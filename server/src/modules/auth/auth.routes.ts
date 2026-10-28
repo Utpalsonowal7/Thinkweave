@@ -15,10 +15,11 @@ const oauthLimit = redisLimit('auth-oauth', 10, 15 * 60);
 // OAuth callbacks use state + PKCE; provider redirects cannot include our Origin header.
 authRouter.get('/oauth/:provider', oauthLimit, oauth.start);
 authRouter.get('/oauth/:provider/callback', oauth.callback);
-authRouter.post('/oauth/:provider/link', requireTrustedOrigin, requireJson, oauthLimit, oauth.link);
+authRouter.post('/oauth/:provider/link', requireTrustedOrigin, requireJson, oauthLimit, authenticate, oauth.link);
 
 authRouter.post('/register', requireTrustedOrigin, requireJson, emailLimit, auth.register);
 authRouter.post('/login', requireTrustedOrigin, requireJson, loginLimit, auth.login);
+authRouter.post('/refresh', requireTrustedOrigin, requireJson, tokenLimit, auth.refresh);
 authRouter.post('/verification/request', requireTrustedOrigin, requireJson, emailLimit, security.requestVerification);
 authRouter.post('/verification/confirm', requireTrustedOrigin, requireJson, tokenLimit, security.verifyEmail);
 authRouter.post('/password/forgot', requireTrustedOrigin, requireJson, emailLimit, security.requestReset);
