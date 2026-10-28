@@ -33,7 +33,14 @@ export async function login(input: Credentials, userAgent?: string) {
   const passwordHash = user?.passwordHash ?? await getDummyHash();
   const valid = await argon2.verify(passwordHash, input.password);
   if (!user || !user.passwordHash || !valid) throw new ApiError(401, 'Invalid email or password.');
-  const { token, expiresAt } = await createSession(user.id, userAgent);
+  const token = newToken();
+  const expiresAt = new Date(Date.now() + sessionLifetime);
+  await prisma.$transaction(async (tx) => {
+    // Lock and re-check the password version before issuing a session.
+    const current = await tx.user.updateMany({ where: { id: user.id, passwordHash: user.passwordHash }, data: { updatedAt: new Date() } });
+    if (current.count !== 1) throw new ApiError(401, 'Invalid email or password.');
+    await tx.session.create({ data: { userId: user.id, refreshTokenHash: hashToken(token), expiresAt, ...(userAgent ? { userAgent: userAgent.slice(0, 512) } : {}) } });
+  });
   return {
     token,
     expiresAt,

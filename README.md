@@ -79,7 +79,7 @@ Board content is intended to be stored as Yjs binary updates and snapshots, rath
 
 ## Next steps
 
-Add email verification and session-management features, then workspace membership and invitation APIs. Add live editing and Gemini only after authorization and persistence behavior are implemented. Explain and review each feature before moving on.
+Verify authentication end to end with your configured services, then build workspace membership and invitation APIs. Add live editing and Gemini only after authorization and persistence behavior are implemented. Explain and review each feature before moving on.
 
 ## Authentication
 
@@ -94,9 +94,9 @@ All routes are under `/api/v1/auth`. Registration creates an account; login star
 
 Send `Content-Type: application/json` for each POST. Email is trimmed and lowercased, names must contain 2–100 characters, and passwords must contain 12–128 characters. Passwords are hashed with Argon2id. Login uses a generic error for unknown accounts and incorrect passwords. A random 32-byte session token is sent in an HttpOnly, SameSite=Strict cookie; only its SHA-256 hash is stored in the existing `Session.refreshTokenHash` column. Sessions expire after seven days and logout revokes the current one. No JWT or token rotation is implemented.
 
-On production (`NODE_ENV=production`) the cookie is Secure and uses the `__Host-` prefix, requiring HTTPS. Local development uses a non-Secure cookie. JSON-only mutation routes and the strict same-site cookie are part of the current same-origin CSRF protection. No cross-origin CORS configuration is provided; revisit CSRF and explicit origin rules before supporting a frontend on a different site.
+On production (`NODE_ENV=production`) the cookie is Secure and uses the `__Host-` prefix, requiring HTTPS. Local development uses a non-Secure cookie. Authentication mutations require a JSON body and an exact matching Origin header. The API permits credentialed CORS only for APP_ORIGIN. SameSite=Strict cookies support same-site deployments; a frontend on a different site requires a separate cookie and CSRF design.
 
-Registration and login share an in-memory limit of 10 requests per IP per 15 minutes. This is suitable for local development and a single process only: it resets on restart and is not shared between instances. Configure trusted proxies correctly and replace it with a shared Redis-backed limit before deploying behind a proxy or scaling. Password verification is intentionally expensive, so also capacity-plan and apply edge-level abuse controls. Email verification, password reset, session rotation, and account recovery are not implemented.
+Authentication routes use shared Redis-backed per-IP rate limits and a per-address email cooldown. Authentication mutations fail closed when Redis is unavailable. Express does not trust proxy headers by default; configure trusted proxies deliberately before deployment, or users behind a proxy may share a limit. Password verification is intentionally expensive, so also capacity-plan and apply edge-level abuse controls. Session rotation and recovery for social-only accounts are not implemented.
 
 ## Google and GitHub sign-in
 
@@ -121,4 +121,26 @@ Providers are identified by their stable Google `sub` or GitHub numeric ID. Goog
 
 **Existing email accounts are never linked automatically.** First log in to the existing ThinkWeave account, then send JSON `{}` to `POST /api/v1/auth/oauth/google/link` or `/api/v1/auth/oauth/github/link`. Navigate the same browser to the returned `data.authorizationUrl`. The callback links only if that same server-side session remains valid. A provider identity already linked to another user cannot be transferred. Only one account per provider may be linked to each user.
 
-OAuth state uses a short-lived HttpOnly SameSite=Lax cookie bound to a single-use Redis entry; authorization uses PKCE S256. Starting a second flow for the same provider in the same browser replaces its state cookie. Session cookies remain SameSite=Strict, so a frontend hosted on a different site needs a separate CORS and CSRF design. OAuth initiation uses the existing in-memory per-IP limiter, which must be replaced by a shared limiter before multi-instance deployment. Provider credentials and real database/Redis services are required for a full end-to-end check.
+OAuth state uses a short-lived HttpOnly SameSite=Lax cookie bound to a single-use Redis entry; authorization uses PKCE S256. Starting a second flow for the same provider in the same browser replaces its state cookie. Session cookies remain SameSite=Strict, so a frontend hosted on a different site needs a separate CORS and CSRF design. OAuth initiation uses the shared Redis-backed per-IP limiter. Provider credentials and real database/Redis services are required for a full end-to-end check.
+
+## Verification, reset, and session management
+
+Set `APP_ORIGIN` to the exact trusted frontend origin (no trailing slash), `APP_URL` to the frontend base URL, `BREVO_API_KEY`, and `EMAIL_FROM` to a verified Brevo sender in `server/.env`. Set HTTPS URLs and `NODE_ENV=production` for deployment. Do not put secrets in Git. Run `npm run prisma:generate` and `npm run db:deploy` after updating. Redis and PostgreSQL must both be available. Authentication writes reject requests without a matching `Origin` header, including API clients; include `Origin: http://localhost:5173` for local manual requests. Browser fetches from that origin should use `credentials: 'include'`.
+
+| Method and path under `/api/v1/auth` | JSON body |
+| --- | --- |
+| `POST /verification/request` | `{ "email": "user@example.com" }` |
+| `POST /verification/confirm` | `{ "token": "..." }` |
+| `POST /password/forgot` | `{ "email": "user@example.com" }` |
+| `POST /password/reset` | `{ "token": "...", "password": "new-long-password" }` |
+| `GET /sessions` | No body; current valid session cookie required |
+| `POST /sessions/:id/revoke` | `{}`; only the session owner can revoke it |
+| `POST /sessions/revoke-all` | `{}`; revokes every session including the current one |
+
+Registration attempts to send a verification email; if email configuration or delivery fails, the account remains registered and the user can request another link. Request endpoints return a generic response for known and unknown addresses. There is a 60-second per-address cooldown and per-IP limits. Verification tokens expire after 24 hours; password reset tokens expire after 15 minutes. Only hashes are stored. A reset consumes the token and revokes the user's sessions in a database transaction. Login checks the password version inside a transaction before issuing a session.
+
+Email links point to `/verify-email#token=...` and `/reset-password#token=...` on `APP_URL`; fragments are not sent in the HTTP request. **The frontend pages are not built yet**: they must read the token from the fragment, remove it from the visible URL, and POST it in JSON. Until then, use the token from your own email in a manual API request. Do not log tokens or post them in query strings.
+
+`authenticate` validates the stored session and populates `res.locals.auth`; `requireVerifiedEmail` is available for future protected product routes. Account/session endpoints remain accessible to signed-in unverified users so they can manage their account. Social provider email claims do not automatically mark the ThinkWeave email verified; users should complete the verification flow. The app uses opaque sessions; token rotation, replay-family detection, email change, and recovery for social-only accounts are not implemented. Password reset currently applies only to accounts that already have a password.
+
+OAuth initiation and login limits require Redis and fail closed when it is unavailable. When running behind a reverse proxy, explicitly configure Express `trust proxy` to match your infrastructure; the default avoids trusting spoofed forwarding headers but can group users under the proxy IP. Verification and reset email delivery, real OAuth redirects, migration application, and race conditions must be checked with configured external services before production.

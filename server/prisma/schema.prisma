@@ -9,6 +9,11 @@ datasource db {
   provider = "postgresql"
 }
 
+enum AuthActionType {
+  VERIFY_EMAIL
+  RESET_PASSWORD
+}
+
 enum OAuthProvider {
   GOOGLE
   GITHUB
@@ -36,12 +41,27 @@ model User {
   emailVerifiedAt DateTime?             @db.Timestamptz(3)
   createdAt       DateTime              @default(now()) @db.Timestamptz(3)
   updatedAt       DateTime              @updatedAt @db.Timestamptz(3)
+  authActions     AuthActionToken[]
   oauthAccounts   OAuthAccount[]
   sessions        Session[]
   memberships     WorkspaceMember[]
   createdBoards   Board[]               @relation("BoardCreator")
   invitationsSent WorkspaceInvitation[] @relation("InvitationSender")
   proposals       AIProposal[]
+}
+
+model AuthActionToken {
+  id         String         @id @default(uuid()) @db.Uuid
+  userId     String         @db.Uuid
+  type       AuthActionType
+  tokenHash  String         @unique
+  expiresAt  DateTime       @db.Timestamptz(3)
+  consumedAt DateTime?      @db.Timestamptz(3)
+  createdAt  DateTime       @default(now()) @db.Timestamptz(3)
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@index([expiresAt])
 }
 
 model OAuthAccount {

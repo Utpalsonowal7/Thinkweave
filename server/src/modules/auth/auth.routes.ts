@@ -1,29 +1,30 @@
 import { Router } from 'express';
-import { rateLimit } from 'express-rate-limit';
-import { ApiError } from '../../utils/api-error.js';
+import { authenticate } from '../../middlewares/authenticate.js';
+import { redisLimit, requireJson, requireTrustedOrigin } from '../../middlewares/security.js';
 import * as auth from './auth.controller.js';
 import * as oauth from './oauth.controller.js';
+import * as security from './security.controller.js';
 
 export const authRouter = Router();
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 10,
-  standardHeaders: 'draft-8',
-  legacyHeaders: false,
-  handler: (_req, _res, next) => next(new ApiError(429, 'Too many attempts. Please try again later.')),
-});
+authRouter.use((_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
+const loginLimit = redisLimit('auth-login', 10, 15 * 60);
+const emailLimit = redisLimit('auth-email', 5, 15 * 60);
+const tokenLimit = redisLimit('auth-token', 10, 15 * 60);
+const oauthLimit = redisLimit('auth-oauth', 10, 15 * 60);
 
-// JSON-only mutations prevent ordinary cross-site HTML forms from submitting credentials or logout.
-authRouter.get('/oauth/:provider', limiter, oauth.start);
-authRouter.post('/oauth/:provider/link', limiter, requireJson, oauth.link);
+// OAuth callbacks use state + PKCE; provider redirects cannot include our Origin header.
+authRouter.get('/oauth/:provider', oauthLimit, oauth.start);
 authRouter.get('/oauth/:provider/callback', oauth.callback);
+authRouter.post('/oauth/:provider/link', requireTrustedOrigin, requireJson, oauthLimit, oauth.link);
 
-authRouter.post('/register', limiter, requireJson, auth.register);
-authRouter.post('/login', limiter, requireJson, auth.login);
-authRouter.get('/me', auth.me);
-authRouter.post('/logout', requireJson, auth.logout);
-
-function requireJson(req: import('express').Request, _res: import('express').Response, next: import('express').NextFunction): void {
-  if (!req.is('application/json')) return next(new ApiError(415, 'Content-Type must be application/json.'));
-  next();
-}
+authRouter.post('/register', requireTrustedOrigin, requireJson, emailLimit, auth.register);
+authRouter.post('/login', requireTrustedOrigin, requireJson, loginLimit, auth.login);
+authRouter.post('/verification/request', requireTrustedOrigin, requireJson, emailLimit, security.requestVerification);
+authRouter.post('/verification/confirm', requireTrustedOrigin, requireJson, tokenLimit, security.verifyEmail);
+authRouter.post('/password/forgot', requireTrustedOrigin, requireJson, emailLimit, security.requestReset);
+authRouter.post('/password/reset', requireTrustedOrigin, requireJson, tokenLimit, security.resetPassword);
+authRouter.get('/me', authenticate, auth.me);
+authRouter.get('/sessions', authenticate, security.sessions);
+authRouter.post('/sessions/revoke-all', requireTrustedOrigin, requireJson, authenticate, security.revokeAll);
+authRouter.post('/sessions/:id/revoke', requireTrustedOrigin, requireJson, authenticate, security.revokeSession);
+authRouter.post('/logout', requireTrustedOrigin, requireJson, authenticate, auth.logout);
