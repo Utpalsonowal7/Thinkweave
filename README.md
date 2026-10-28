@@ -1,6 +1,6 @@
 # ThinkWeave
 
-A collaborative planning board built in reviewable steps. This checkpoint sets up the backend foundation and database schema; it does not implement authentication, workspaces, boards, live editing, or AI endpoints yet.
+A collaborative planning board built in reviewable steps. This checkpoint sets up the backend foundation and database schema; it implements email/password registration and session login. Workspace APIs, live editing, and AI endpoints come later.
 
 ## Stack
 
@@ -78,4 +78,21 @@ Board content is intended to be stored as Yjs binary updates and snapshots, rath
 
 ## Next steps
 
-Build authentication and session rotation, then workspace membership and invitation APIs. Add live editing and Gemini only after authorization and persistence behavior are implemented. Explain and review each feature before moving on.
+Add email verification and session-management features, then workspace membership and invitation APIs. Add live editing and Gemini only after authorization and persistence behavior are implemented. Explain and review each feature before moving on.
+
+## Authentication
+
+All routes are under `/api/v1/auth`. Registration creates an account; login starts a separate session.
+
+| Method and route | Body | Result |
+| --- | --- | --- |
+| `POST /register` | `{ "name": "Utpal", "email": "utpal@example.com", "password": "a-long-password" }` | Creates an account and returns its public fields; then log in |
+| `POST /login` | `{ "email": "utpal@example.com", "password": "a-long-password" }` | Sets a session cookie and returns the user |
+| `GET /me` | None | Returns the user for a valid session cookie |
+| `POST /logout` | `{}` | Revokes the current session and clears the cookie |
+
+Send `Content-Type: application/json` for each POST. Email is trimmed and lowercased, names must contain 2–100 characters, and passwords must contain 12–128 characters. Passwords are hashed with Argon2id. Login uses a generic error for unknown accounts and incorrect passwords. A random 32-byte session token is sent in an HttpOnly, SameSite=Strict cookie; only its SHA-256 hash is stored in the existing `Session.refreshTokenHash` column. Sessions expire after seven days and logout revokes the current one. No JWT or token rotation is implemented in this checkpoint.
+
+On production (`NODE_ENV=production`) the cookie is Secure and uses the `__Host-` prefix, requiring HTTPS. Local development uses a non-Secure cookie. JSON-only mutation routes and the strict same-site cookie are part of the current same-origin CSRF protection. No cross-origin CORS configuration is provided; revisit CSRF and explicit origin rules before supporting a frontend on a different site.
+
+Registration and login share an in-memory limit of 10 requests per IP per 15 minutes. This is suitable for local development and a single process only: it resets on restart and is not shared between instances. Configure trusted proxies correctly and replace it with a shared Redis-backed limit before deploying behind a proxy or scaling. Password verification is intentionally expensive, so also capacity-plan and apply edge-level abuse controls. Email verification, password reset, session rotation, and account recovery are not implemented.
