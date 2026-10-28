@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import { ApiError } from '../../utils/api-error.js';
 import * as auth from './auth.controller.js';
+import * as oauth from './oauth.controller.js';
 
 export const authRouter = Router();
 const limiter = rateLimit({
@@ -13,6 +14,10 @@ const limiter = rateLimit({
 });
 
 // JSON-only mutations prevent ordinary cross-site HTML forms from submitting credentials or logout.
+authRouter.get('/oauth/:provider', limiter, oauth.start);
+authRouter.post('/oauth/:provider/link', limiter, requireJson, oauth.link);
+authRouter.get('/oauth/:provider/callback', oauth.callback);
+
 authRouter.post('/register', limiter, requireJson, auth.register);
 authRouter.post('/login', limiter, requireJson, auth.login);
 authRouter.get('/me', auth.me);

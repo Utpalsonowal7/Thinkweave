@@ -5,10 +5,10 @@ import * as auth from './auth.service.js';
 import { parseCredentials, parseRegistration } from './auth.validation.js';
 
 const isProduction = process.env.NODE_ENV === 'production';
-const cookieName = isProduction ? '__Host-thinkweave_session' : 'thinkweave_session';
-const cookieOptions = { httpOnly: true, secure: isProduction, sameSite: 'strict' as const, path: '/' };
+export const cookieName = isProduction ? '__Host-thinkweave_session' : 'thinkweave_session';
+export const cookieOptions = { httpOnly: true, secure: isProduction, sameSite: 'strict' as const, path: '/' };
 
-function getToken(req: Request): string {
+export function getToken(req: Request): string {
   const pairs = (req.headers.cookie ?? '').split(';').map((part) => part.trim());
   const matches = pairs.filter((part) => part.startsWith(`${cookieName}=`));
   if (matches.length !== 1) throw new ApiError(401, 'Session is invalid or expired.');

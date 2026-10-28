@@ -9,6 +9,11 @@ datasource db {
   provider = "postgresql"
 }
 
+enum OAuthProvider {
+  GOOGLE
+  GITHUB
+}
+
 enum WorkspaceRole {
   OWNER
   ADMIN
@@ -26,16 +31,29 @@ model User {
   id              String                @id @default(uuid()) @db.Uuid
   name            String
   email           String                @unique
-  passwordHash    String
+  passwordHash    String?
   avatarUrl       String?
   emailVerifiedAt DateTime?             @db.Timestamptz(3)
   createdAt       DateTime              @default(now()) @db.Timestamptz(3)
   updatedAt       DateTime              @updatedAt @db.Timestamptz(3)
+  oauthAccounts   OAuthAccount[]
   sessions        Session[]
   memberships     WorkspaceMember[]
   createdBoards   Board[]               @relation("BoardCreator")
   invitationsSent WorkspaceInvitation[] @relation("InvitationSender")
   proposals       AIProposal[]
+}
+
+model OAuthAccount {
+  id             String        @id @default(uuid()) @db.Uuid
+  userId         String        @db.Uuid
+  provider       OAuthProvider
+  providerUserId String
+  createdAt      DateTime      @default(now()) @db.Timestamptz(3)
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerUserId])
+  @@unique([userId, provider])
 }
 
 model Session {

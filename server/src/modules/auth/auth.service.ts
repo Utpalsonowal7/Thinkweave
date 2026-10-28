@@ -13,7 +13,7 @@ let dummyHash: Promise<string> | undefined;
 function getDummyHash(): Promise<string> {
   return dummyHash ??= argon2.hash('not-a-real-account-password', passwordOptions);
 }
-function hashToken(token: string): string {
+export function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 function newToken(): string { return randomBytes(32).toString('base64url'); }
@@ -32,10 +32,8 @@ export async function login(input: Credentials, userAgent?: string) {
   const user = await prisma.user.findUnique({ where: { email: input.email } });
   const passwordHash = user?.passwordHash ?? await getDummyHash();
   const valid = await argon2.verify(passwordHash, input.password);
-  if (!user || !valid) throw new ApiError(401, 'Invalid email or password.');
-  const token = newToken();
-  const expiresAt = new Date(Date.now() + sessionLifetime);
-  await prisma.session.create({ data: { userId: user.id, refreshTokenHash: hashToken(token), expiresAt, ...(userAgent ? { userAgent: userAgent.slice(0, 512) } : {}) } });
+  if (!user || !user.passwordHash || !valid) throw new ApiError(401, 'Invalid email or password.');
+  const { token, expiresAt } = await createSession(user.id, userAgent);
   return {
     token,
     expiresAt,
@@ -51,4 +49,11 @@ export async function currentUser(token: string) {
 
 export async function logout(token: string): Promise<void> {
   await prisma.session.updateMany({ where: { refreshTokenHash: hashToken(token), revokedAt: null }, data: { revokedAt: new Date() } });
+}
+
+export async function createSession(userId: string, userAgent?: string) {
+  const token = newToken();
+  const expiresAt = new Date(Date.now() + sessionLifetime);
+  await prisma.session.create({ data: { userId, refreshTokenHash: hashToken(token), expiresAt, ...(userAgent ? { userAgent: userAgent.slice(0, 512) } : {}) } });
+  return { token, expiresAt };
 }

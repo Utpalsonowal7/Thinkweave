@@ -1,6 +1,6 @@
 # ThinkWeave
 
-A collaborative planning board built in reviewable steps. This checkpoint sets up the backend foundation and database schema; it implements email/password registration and session login. Workspace APIs, live editing, and AI endpoints come later.
+A collaborative planning board built in reviewable steps. This checkpoint sets up the backend foundation and database schema; it implements email/password and Google/GitHub sign-in with sessions. Workspace APIs, live editing, and AI endpoints come later.
 
 ## Stack
 
@@ -59,7 +59,8 @@ The Prisma schema is `server/prisma/schema.prisma`; generated client code is ign
 | Model | Purpose |
 | --- | --- |
 | User | Account identity and password hash |
-| Session | Per-device refresh-token hash, expiry, and revocation |
+| Session | Per-device session-token hash, expiry, and revocation |
+| OAuthAccount | Provider identity linked to one user |
 | Workspace | Team container |
 | WorkspaceMember | User/workspace membership and role |
 | Board | Board metadata and creator |
@@ -91,8 +92,33 @@ All routes are under `/api/v1/auth`. Registration creates an account; login star
 | `GET /me` | None | Returns the user for a valid session cookie |
 | `POST /logout` | `{}` | Revokes the current session and clears the cookie |
 
-Send `Content-Type: application/json` for each POST. Email is trimmed and lowercased, names must contain 2–100 characters, and passwords must contain 12–128 characters. Passwords are hashed with Argon2id. Login uses a generic error for unknown accounts and incorrect passwords. A random 32-byte session token is sent in an HttpOnly, SameSite=Strict cookie; only its SHA-256 hash is stored in the existing `Session.refreshTokenHash` column. Sessions expire after seven days and logout revokes the current one. No JWT or token rotation is implemented in this checkpoint.
+Send `Content-Type: application/json` for each POST. Email is trimmed and lowercased, names must contain 2–100 characters, and passwords must contain 12–128 characters. Passwords are hashed with Argon2id. Login uses a generic error for unknown accounts and incorrect passwords. A random 32-byte session token is sent in an HttpOnly, SameSite=Strict cookie; only its SHA-256 hash is stored in the existing `Session.refreshTokenHash` column. Sessions expire after seven days and logout revokes the current one. No JWT or token rotation is implemented.
 
 On production (`NODE_ENV=production`) the cookie is Secure and uses the `__Host-` prefix, requiring HTTPS. Local development uses a non-Secure cookie. JSON-only mutation routes and the strict same-site cookie are part of the current same-origin CSRF protection. No cross-origin CORS configuration is provided; revisit CSRF and explicit origin rules before supporting a frontend on a different site.
 
 Registration and login share an in-memory limit of 10 requests per IP per 15 minutes. This is suitable for local development and a single process only: it resets on restart and is not shared between instances. Configure trusted proxies correctly and replace it with a shared Redis-backed limit before deploying behind a proxy or scaling. Password verification is intentionally expensive, so also capacity-plan and apply edge-level abuse controls. Email verification, password reset, session rotation, and account recovery are not implemented.
+
+## Google and GitHub sign-in
+
+Create a Google OAuth web client and a GitHub OAuth App. Configure these **exact** redirect URLs for local development:
+
+- Google: `http://localhost:8080/api/v1/auth/oauth/google/callback`
+- GitHub: `http://localhost:8080/api/v1/auth/oauth/github/callback`
+
+Add `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_CALLBACK_URL`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, `GITHUB_CALLBACK_URL`, and `OAUTH_SUCCESS_REDIRECT` to `server/.env`; see `.env.example`. Use HTTPS for callback and success URLs in production. The success redirect must be a fixed URL under your control; it is not accepted from the request. Apply the new migration and regenerate the client:
+
+```powershell
+cd server
+npm ci
+npm run prisma:generate
+npm run db:deploy
+npm run dev
+```
+
+Redis must be available for OAuth, because one-time state and PKCE verifiers expire there after ten minutes. Login initiation uses `GET /api/v1/auth/oauth/google` or `/api/v1/auth/oauth/github` as a browser navigation. On success the API sets the regular session cookie and redirects to `OAUTH_SUCCESS_REDIRECT`. The frontend can then request `GET /api/v1/auth/me`. Provider errors or account conflicts currently return a JSON error at the callback; there is no frontend error page yet.
+
+Providers are identified by their stable Google `sub` or GitHub numeric ID. Google must provide an email marked verified; GitHub must provide a verified primary email. Provider access tokens are used only to retrieve the profile and are not stored. The app's `emailVerifiedAt` is not set merely because a provider reports an email as verified.
+
+**Existing email accounts are never linked automatically.** First log in to the existing ThinkWeave account, then send JSON `{}` to `POST /api/v1/auth/oauth/google/link` or `/api/v1/auth/oauth/github/link`. Navigate the same browser to the returned `data.authorizationUrl`. The callback links only if that same server-side session remains valid. A provider identity already linked to another user cannot be transferred. Only one account per provider may be linked to each user.
+
+OAuth state uses a short-lived HttpOnly SameSite=Lax cookie bound to a single-use Redis entry; authorization uses PKCE S256. Starting a second flow for the same provider in the same browser replaces its state cookie. Session cookies remain SameSite=Strict, so a frontend hosted on a different site needs a separate CORS and CSRF design. OAuth initiation uses the existing in-memory per-IP limiter, which must be replaced by a shared limiter before multi-instance deployment. Provider credentials and real database/Redis services are required for a full end-to-end check.
