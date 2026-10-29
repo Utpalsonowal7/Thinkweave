@@ -38,6 +38,7 @@ export const errorHandler: ErrorRequestHandler = (error: unknown, req, res, next
   if (isServerError) {
     // Keep raw exceptions, request bodies, headers, and query strings out of this log.
     console.error('Request failed', {
+      requestId: res.locals.requestId,
       method: req.method,
       path: req.path,
       errorName: error instanceof Error ? error.name : 'UnknownError',
