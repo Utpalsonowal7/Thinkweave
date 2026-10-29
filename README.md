@@ -1,10 +1,10 @@
 # ThinkWeave
 
-A collaborative planning board built in reviewable steps. This checkpoint sets up the backend foundation and database schema; it implements email/password and Google/GitHub sign-in with sessions. Workspace APIs, live editing, and AI endpoints come later.
+ThinkWeave is a collaborative planning app: create a workspace, invite a team, connect notes on a shared board, and turn selected notes into a reviewed Gemini task plan. The React client and Node.js API live in separate folders. Realtime transport uses **Socket.IO**, with Yjs for merging board changes.
 
 ## Stack
 
-Node.js 24, TypeScript, Express, PostgreSQL, Prisma ORM 7, Redis (Docker), and a Gemini REST helper. PostgreSQL runs separately; only Redis is in Docker Compose.
+Node.js 24, TypeScript, Express, PostgreSQL, Prisma ORM 7, Redis, Socket.IO, Yjs, React, React Flow, Vite, and Gemini. PostgreSQL and Node run separately; **only Redis is in Docker Compose**.
 
 ## Local setup (Windows PowerShell)
 
@@ -20,7 +20,7 @@ npm ci
 Copy-Item .env.example .env
 ```
 
-3. Edit `server/.env`: replace `DATABASE_URL` with the connection string for your dedicated database. Set `REDIS_URL` if needed. `GEMINI_API_KEY` is optional until AI features are used. Do not commit `.env`.
+3. Edit `server/.env`: replace `DATABASE_URL` with the connection string for your dedicated database. Set `REDIS_URL` if needed. Set `JWT_ACCESS_SECRET` to a private random 64-character hex value (generation command below). Set `APP_ORIGIN`, `APP_URL`, and `OAUTH_SUCCESS_REDIRECT` to `http://localhost:5173`. Set Brevo credentials to deliver verification and invitation emails. `GEMINI_API_KEY` and a `GEMINI_MODEL` available to your account are needed only for AI features. Do not commit `.env`.
 4. Generate the client, apply the checked-in migration, and start the server:
 
 ```powershell
@@ -30,6 +30,17 @@ npm run dev
 ```
 
 Open http://localhost:8080/health. This is a **liveness** endpoint; it does not check database, Redis, or Gemini connectivity. `db:deploy` applies migrations to the database in `DATABASE_URL` and does not reset it. Review the migration before applying it. For development schema changes later, `npm run db:migrate -- --name descriptive_name` uses Prisma's development migration workflow; it can request a shadow database or prompt on drift, so read any prompt and never reset an existing database without a backup.
+
+5. Open a second terminal in the repository root and start the separate frontend:
+
+```powershell
+cd client
+npm ci
+Copy-Item .env.example .env
+npm run dev
+```
+
+Open **http://localhost:5173**, register, verify your email, and log in. Create a workspace and a board; invite a second account to try collaboration. The client uses `VITE_API_URL=http://localhost:8080`. Use `localhost` consistently; switching to `127.0.0.1` changes the trusted origin. When updating an existing checkout, preserve your `.env` files, run `npm ci` in both folders, regenerate Prisma, and apply the new migration with `npm run db:deploy` in `server/`.
 
 ## Commands
 
@@ -48,9 +59,11 @@ Run inside `server/`:
 
 ## Configuration and clients
 
-`src/server.ts` imports `dotenv/config` to load `.env`; each client reads its settings directly from `process.env`. Prisma CLI loads `.env` separately in `prisma.config.ts`. These settings are not centrally validated. `DATABASE_URL` must be set; Redis defaults to `redis://localhost:6379` and `PORT` defaults to 8080. Prisma uses the PostgreSQL driver adapter from `src/lib/prisma.ts`. The Redis client in `src/lib/redis.ts` connects lazily when used; currently no endpoint uses it. `src/lib/gemini.ts` calls the Gemini REST API only on demand and requires a key then. `src/server.ts` closes the HTTP server and clients on shutdown. None of these clients proves an external service is reachable merely because the application starts.
+`server/src/server.ts` imports `dotenv/config` once; modules use `process.env` directly. Prisma CLI loads `.env` separately in `prisma.config.ts`. `DATABASE_URL` and a valid `JWT_ACCESS_SECRET` are required. Redis defaults to `redis://localhost:6379`, the API to port 8080, and the client to port 5173. `VITE_*` variables are public browser configuration: never put provider secrets there.
 
-Redis is bound to localhost by default. Compose uses a named volume for local persistence; cache data should not be treated as the source of truth. The setup is intended for local development and needs appropriate authentication, network restrictions, and operational configuration before production.
+Redis stores rate limits, short-lived OAuth state, and five-minute AI-plan cache entries scoped to board, user, board version, model, and input hash. PostgreSQL stores identities, permissions, board updates, snapshots, and AI proposals. Auth and AI-generation rate limits fail closed if Redis is down; a cache read/write failure alone never changes persisted board state. `/health` is liveness; `/health/ready` checks PostgreSQL and Redis with a bounded response wait. Neither checks Gemini, email, or OAuth providers.
+
+Compose binds Redis to localhost and uses a named volume. The API attaches Socket.IO to its HTTP server; on shutdown it closes connections, drains board work, and closes database/cache clients. Run **one API process** for this release: Redis caching is not a multi-process board coordination mechanism.
 
 ## Models
 
@@ -70,17 +83,25 @@ The Prisma schema is `server/prisma/schema.prisma`; generated client code is ign
 | BoardSnapshot | Binary board checkpoint and optional last update marker |
 | AIProposal | Proposed JSON changes, requester, and review status |
 
-Workspace memberships are unique per user and workspace. A database index restricts a workspace to **at most** one owner; the application must enforce that an owner exists and handle ownership transfer in a transaction. The migration also prevents invitations from assigning the owner role. Email normalization, role authorization, invitation acceptance, valid board state, snapshot restoration, proposal validation, and tenant isolation require future application logic; the schema alone does not implement them. The ordering, compaction and restoration semantics for Yjs updates still need to be designed and validated before collaboration is implemented.
+Workspace memberships are unique per user and workspace. Creation inserts the workspace and owner atomically. A database partial index permits at most one owner; the API prevents deleting or changing that owner. Invitations are single-use, expiring, hashed, bound to the recipient's verified email, and cannot assign the owner role. Only owners can promote or manage admins.
 
-Board content is intended to be stored as Yjs binary updates and snapshots, rather than independent SQL rows for every canvas item. `AIProposal.proposal` is untrusted JSON until validated by the future AI service; no AI actions are applied yet. The optional last-update marker is a cursor, not a foreign key, because old updates may later be compacted.
+Board content is stored as Yjs updates. Every restore increments `Board.epoch`; updates, snapshots, and browser caches are separated by epoch. A client from an old version must export unsynced notes before reloading. Saved AI proposals contain validated tasks and their board epoch. Approval persists a Yjs update and the proposal's APPLIED status in the same transaction; rejection leaves the board untouched. Repeat approval is idempotent.
 
 ## Responses and errors
 
 `ApiResponse` stores `statusCode`, `message`, `data`, and `success`. `ApiError` extends `Error` with a status, optional details, and captured stack. The middleware returns safe JSON errors; 5xx responses do not expose internal messages or stack traces. Read `src/utils/` and `src/middlewares/` for the request flow.
 
-## Next steps
+## Included product flows
 
-Verify authentication end to end with your configured services, then build workspace membership and invitation APIs. Add live editing and Gemini only after authorization and persistence behavior are implemented. Explain and review each feature before moving on.
+- Password, Google, and GitHub login; email verification and password reset; session revocation and provider linking.
+- Workspaces, invitation acceptance, member roles, board creation, rename, and archive.
+- Notes and connectors, dragging, local undo/redo, live cursors, presence, and read-only viewers.
+- Open-board offline editing with IndexedDB storage and Yjs synchronization after reconnecting.
+- Saved snapshots, owner/admin restore, stale-version protection, and local JSON export.
+- Gemini task suggestions with preview, pending-plan recovery, explicit approval/rejection, and short-lived Redis caching.
+- Request-ID logs, liveness/readiness routes, and CI for Prisma validation, type checks, and builds. No automated test files are included, as requested.
+
+Read [the architecture and limits](docs/architecture.md), [product API and Socket.IO contract](docs/api.md), and [the manual walkthrough](docs/walkthrough.md) before evaluating the release. Builds and mocked local Socket.IO checks do not prove production reliability, deployment, concurrency scale, or latency targets. This checkout has not been deployed to AWS or benchmarked against a real PostgreSQL dataset.
 
 ## Authentication
 
@@ -145,9 +166,9 @@ Set `APP_ORIGIN` to the exact trusted frontend origin (no trailing slash), `APP_
 
 Registration attempts to send a verification email; if email configuration or delivery fails, the account remains registered and the user can request another link. Request endpoints return a generic response for known and unknown addresses. There is a 60-second per-address cooldown and per-IP limits. Verification tokens expire after 24 hours; password reset tokens expire after 15 minutes. Only hashes are stored. A reset consumes the token and revokes the user's sessions in a database transaction. Login checks the password version inside a transaction before issuing a session.
 
-Email links point to `/verify-email#token=...` and `/reset-password#token=...` on `APP_URL`; fragments are not sent in the HTTP request. **The frontend pages are not built yet**: they must read the token from the fragment, remove it from the visible URL, and POST it in JSON. Until then, use the token from your own email in a manual API request. Do not log tokens or post them in query strings.
+Email links point to `/verify-email#token=...` and `/reset-password#token=...` on `APP_URL`; fragments are not sent in the HTTP request. The frontend pages read the token from the fragment, remove it from the visible URL, and POST it in JSON after confirmation. If an invitation requires login, sign in and reopen the link from your email. Do not log tokens or post them in query strings.
 
-`authenticate` validates the stored session and populates `res.locals.auth`; `requireVerifiedEmail` is available for future protected product routes. Account/session endpoints remain accessible to signed-in unverified users so they can manage their account. Social provider email claims do not automatically mark the ThinkWeave email verified; users should complete the verification flow. The app uses rotating opaque refresh tokens and signed access tokens; email change and recovery for social-only accounts are not implemented. Password reset currently applies only to accounts that already have a password.
+`authenticate` validates the stored session and populates `res.locals.auth`; `requireVerifiedEmail` protects workspace, board, and realtime access. Account/session endpoints remain accessible to signed-in unverified users so they can manage their account. Social provider email claims do not automatically mark the ThinkWeave email verified; users should complete the verification flow. The app uses rotating opaque refresh tokens and signed access tokens; email change and recovery for social-only accounts are not implemented. Password reset currently applies only to accounts that already have a password.
 
 OAuth initiation and login limits require Redis and fail closed when it is unavailable. When running behind a reverse proxy, explicitly configure Express `trust proxy` to match your infrastructure; the default avoids trusting spoofed forwarding headers but can group users under the proxy IP. Verification and reset email delivery, real OAuth redirects, migration application, and race conditions must be checked with configured external services before production.
 
@@ -159,6 +180,6 @@ Set `JWT_ACCESS_SECRET` in `server/.env` to at least 32 cryptographically random
 node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 ```
 
-Copy the output into `.env` and keep it private. The server refuses to start without a valid hex value. Deploy the same secret to instances that must verify each other's access tokens; rotating it invalidates existing access tokens. The migration intentionally revokes **all existing sessions** because old session cookies have no refresh-token history. Users must log in again after `npm run db:deploy`. New OAuth and password logins issue the new cookies.
+Copy the output into `.env` and keep it private. The server refuses to start without a valid hex value. Deploy the same secret to instances that must verify each other's access tokens; rotating it invalidates existing access tokens. The earlier access-token migration intentionally revoked existing sessions once, when upgrading from legacy session cookies. The new board-epoch migration does not revoke sessions. New OAuth and password logins issue the new cookies.
 
-The refresh implementation serializes each session's database update and retains consumed hashes; database integration and concurrent replay behavior still need verification against a running PostgreSQL instance before deployment.
+The frontend serializes refresh requests across tabs with the Web Locks API. Use a current browser on localhost or HTTPS; without Web Locks, an expired access token requires signing in again. The refresh implementation serializes each session's database update and retains consumed hashes; database integration and concurrent replay behavior still need verification against a running PostgreSQL instance before deployment.
