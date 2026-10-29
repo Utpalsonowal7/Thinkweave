@@ -6,11 +6,14 @@ import {
   ReactFlow,
   ViewportPortal,
   applyNodeChanges,
+  applyEdgeChanges,
   type Connection,
   type Edge,
+  type EdgeChange,
   type Node,
   type NodeChange,
   type ReactFlowInstance,
+  type OnSelectionChangeParams,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import * as Y from 'yjs';
@@ -45,6 +48,16 @@ export function Board({ user }: { user: User }) {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
+  const selectionChanged = useCallback(
+    ({ nodes: pickedNodes, edges: pickedEdges }: OnSelectionChangeParams) => {
+      setSelected(pickedNodes.map((node) => node.id));
+      setSelectedEdges(pickedEdges.map((edge) => edge.id));
+    },
+    [],
+  );
+  const edgeChanges = useCallback((changes: EdgeChange[]) => {
+    setEdges((current) => applyEdgeChanges(changes, current));
+  }, []);
   const [snapshots, setSnapshots] = useState<
     Array<{ id: string; createdAt: string; epoch: number }>
   >([]);
@@ -133,7 +146,12 @@ export function Board({ user }: { user: User }) {
           selected: previous.find((old) => old.id === node.id)?.selected,
         })),
       );
-      setEdges(nextEdges);
+      setEdges((previous) =>
+        nextEdges.map((edge) => ({
+          ...edge,
+          selected: previous.find((old) => old.id === edge.id)?.selected,
+        })),
+      );
     }
     doc.on('update', render);
     render();
@@ -547,11 +565,10 @@ export function Board({ user }: { user: User }) {
             nodes={nodes}
             edges={edges}
             onNodesChange={nodeChanges}
+            onEdgesChange={edgeChanges}
             onConnect={connect}
-            onSelectionChange={({ nodes: selectedNodes, edges: pickedEdges }) => {
-              setSelected(selectedNodes.map((n) => n.id));
-              setSelectedEdges(pickedEdges.map((e) => e.id));
-            }}
+            onSelectionChange={selectionChanged}
+            multiSelectionKeyCode="Shift"
             nodesDraggable={!!canEdit}
             nodesConnectable={!!canEdit}
             elementsSelectable
